@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: tm-asociados-gestion-juridica
+    runtime: static
+    staticPublishPath: .
+    autoDeploy: true
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
