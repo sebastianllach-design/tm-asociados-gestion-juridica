@@ -331,7 +331,64 @@ export async function archiveDocument(
 
   assertNoError(error);
 }
+export async function deleteTask(id) {
 
+  const { error } =
+    await supabase
+      .from("tasks")
+      .delete()
+      .eq("id", id);
+
+  assertNoError(error);
+}
+
+
+export async function deleteDocument(id) {
+
+  const { error } =
+    await supabase
+      .from("documents")
+      .delete()
+      .eq("id", id);
+
+  assertNoError(error);
+}
+
+
+export async function deleteAction(id) {
+
+  const { error } =
+    await supabase
+      .from("actions")
+      .delete()
+      .eq("id", id);
+
+  assertNoError(error);
+}
+
+
+export async function deleteCase(id) {
+
+  const { error } =
+    await supabase
+      .from("cases")
+      .delete()
+      .eq("id", id);
+
+  assertNoError(error);
+}
+
+
+export async function deleteClient(id) {
+
+  const { error } =
+    await supabase
+      .from("clients")
+      .delete()
+      .eq("id", id);
+
+  assertNoError(error);
+}
 export function resetDemo() {
   // Sin uso desde que Supabase
   // es la memoria oficial.
