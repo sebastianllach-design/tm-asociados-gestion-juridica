@@ -1,98 +1,338 @@
-import { DEMO } from "./demo-data.js";
+const cfg = window.LEX_CONFIG || {};
 
-export const isDemo = true;
-export const bucket = "local-preview";
-export const supabase = null;
+if (!cfg.SUPABASE_URL || !cfg.SUPABASE_PUBLISHABLE_KEY) {
+  throw new Error(
+    "Falta configurar SUPABASE_URL o SUPABASE_PUBLISHABLE_KEY en config.js"
+  );
+}
 
-const LS = "tm-asociados-render-etapa1-v1";
-const DB_NAME = "tm-asociados-local-files";
-const STORE = "files";
+const { createClient } = await import(
+  "https://esm.sh/@supabase/supabase-js@2"
+);
 
-function clone(o){return JSON.parse(JSON.stringify(o))}
-function state(){
-  const raw=localStorage.getItem(LS);
-  if(raw){try{return JSON.parse(raw)}catch{}}
-  const d=clone(DEMO); d.documents=d.documents||[];
-  localStorage.setItem(LS,JSON.stringify(d)); return d;
-}
-function save(s){localStorage.setItem(LS,JSON.stringify(s))}
-function randomId(prefix){return `${prefix}-${crypto.randomUUID().slice(0,8).toUpperCase()}`}
-function openDb(){
-  return new Promise((resolve,reject)=>{
-    const req=indexedDB.open(DB_NAME,1);
-    req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE,{keyPath:"id"})};
-    req.onsuccess=()=>resolve(req.result); req.onerror=()=>reject(req.error);
-  });
-}
-async function putBlob(rec){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,"readwrite");tx.objectStore(STORE).put(rec);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error)})}
-async function getBlob(id){const db=await openDb();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,"readonly");const q=tx.objectStore(STORE).get(id);q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)})}
-export async function hashFile(file){
-  const buf=await file.arrayBuffer();const hash=await crypto.subtle.digest("SHA-256",buf);
-  return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-export async function authSession(){return {user:{id:"render-preview",email:"preview@tm-asociados.local"}}}
-export async function login(email,password){return {user:{email}}}
-export async function logout(){}
-export async function loadAll(){return state()}
-export async function upsertClient(obj){
-  const s=state();const i=s.clients.findIndex(x=>x.id===obj.id);
-  if(i>=0)s.clients[i]={...s.clients[i],...obj};else s.clients.push({...obj,id:obj.id||randomId("CL")});
-  save(s);
-}
-export async function upsertCase(obj){
-  const s=state();const i=s.cases.findIndex(x=>x.id===obj.id);
-  if(i>=0)s.cases[i]={...s.cases[i],...obj};else s.cases.push({...obj,id:obj.id||randomId("CAS")});
-  save(s);
-}
-export async function addAction(obj,files=[]){
-  const s=state(), actionId=obj.id||randomId("A");
-  s.actions.push({...obj,id:actionId});
-  const c=s.cases.find(x=>x.id===obj.case_id);
-  if(c){
-    c.status=obj.status_to||c.status;c.priority=obj.priority_to||c.priority;c.risk=obj.risk_to||c.risk;c.last_action=obj.action_date;
+export const supabase = createClient(
+  cfg.SUPABASE_URL,
+  cfg.SUPABASE_PUBLISHABLE_KEY,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
   }
-  s.documents=s.documents||[];
-  save(s);
-  for(const file of files){
-    const id=randomId("FILE"), sha256=await hashFile(file);
-    await putBlob({id,blob:file,name:file.name,type:file.type,size:file.size,created_at:new Date().toISOString()});
-    const current=state();
-    current.documents=current.documents||[];
-    current.documents.push({
-      id,case_id:obj.case_id,action_id:actionId,file_name:file.name,
-      object_path:`local://${id}`,mime_type:file.type,size_bytes:file.size,sha256,
-      created_at:new Date().toISOString(),archived_at:null
+);
+
+export const isDemo = false;
+export const bucket = null;
+
+function randomId(prefix) {
+  return `${prefix}-${crypto.randomUUID()
+    .slice(0, 8)
+    .toUpperCase()}`;
+}
+
+function assertNoError(error) {
+  if (error) throw error;
+}
+
+export async function authSession() {
+  const { data, error } =
+    await supabase.auth.getSession();
+
+  assertNoError(error);
+
+  return data.session;
+}
+
+export async function login(email, password) {
+  const { data, error } =
+    await supabase.auth.signInWithPassword({
+      email,
+      password
     });
-    save(current);
+
+  assertNoError(error);
+
+  return data;
+}
+
+export async function logout() {
+  const { error } =
+    await supabase.auth.signOut();
+
+  assertNoError(error);
+}
+
+export async function loadAll() {
+  const [
+    clients,
+    cases,
+    actions,
+    tasks,
+    documents,
+    fees
+  ] = await Promise.all([
+    supabase
+      .from("clients")
+      .select("*")
+      .order("created_at", {
+        ascending: true
+      }),
+
+    supabase
+      .from("cases")
+      .select("*")
+      .order("created_at", {
+        ascending: true
+      }),
+
+    supabase
+      .from("actions")
+      .select("*")
+      .order("action_date", {
+        ascending: false
+      }),
+
+    supabase
+      .from("tasks")
+      .select("*")
+      .order("due_date", {
+        ascending: true
+      }),
+
+    supabase
+      .from("documents")
+      .select("*")
+      .is("archived_at", null)
+      .order("created_at", {
+        ascending: false
+      }),
+
+    supabase
+      .from("fee_movements")
+      .select("*")
+      .order("movement_date", {
+        ascending: false
+      })
+  ]);
+
+  for (const result of [
+    clients,
+    cases,
+    actions,
+    tasks,
+    documents,
+    fees
+  ]) {
+    assertNoError(result.error);
   }
+
+  return {
+    clients: clients.data || [],
+    cases: cases.data || [],
+    actions: actions.data || [],
+    tasks: tasks.data || [],
+    documents: documents.data || [],
+    fee_movements: fees.data || []
+  };
+}
+
+export async function upsertClient(obj) {
+  const payload = {
+    ...obj
+  };
+
+  if (!payload.id) {
+    payload.id = randomId("CL");
+  }
+
+  const { error } =
+    await supabase
+      .from("clients")
+      .upsert(payload, {
+        onConflict: "id"
+      });
+
+  assertNoError(error);
+}
+
+export async function upsertCase(obj) {
+  const payload = {
+    ...obj
+  };
+
+  if (!payload.id) {
+    payload.id = randomId("CAS");
+  }
+
+  const { error } =
+    await supabase
+      .from("cases")
+      .upsert(payload, {
+        onConflict: "id"
+      });
+
+  assertNoError(error);
+}
+
+export async function addAction(
+  obj,
+  files = []
+) {
+  if (files.length) {
+    throw new Error(
+      "Los documentos todavía no están conectados a Google Drive. Guardá la actuación sin adjuntos por ahora."
+    );
+  }
+
+  const actionId =
+    obj.id || randomId("A");
+
+  const payload = {
+    ...obj,
+    id: actionId
+  };
+
+  const { error: actionError } =
+    await supabase
+      .from("actions")
+      .insert(payload);
+
+  assertNoError(actionError);
+
+  const update = {
+    last_action: obj.action_date
+  };
+
+  if (obj.status_to) {
+    update.status = obj.status_to;
+  }
+
+  if (obj.priority_to) {
+    update.priority = obj.priority_to;
+  }
+
+  if (obj.risk_to) {
+    update.risk = obj.risk_to;
+  }
+
+  const { error: caseError } =
+    await supabase
+      .from("cases")
+      .update(update)
+      .eq("id", obj.case_id);
+
+  assertNoError(caseError);
+
   return actionId;
 }
-export async function addTask(obj){
-  const s=state();s.tasks.push({...obj,id:randomId("T")});save(s);
+
+export async function addTask(obj) {
+  const { error } =
+    await supabase
+      .from("tasks")
+      .insert(obj);
+
+  assertNoError(error);
 }
-export async function toggleTask(id,status){
-  const s=state(),t=s.tasks.find(x=>x.id===id);if(t)t.status=status==="Completada"?"Pendiente":"Completada";save(s);
+
+export async function toggleTask(
+  id,
+  status
+) {
+  const next =
+    status === "Completada"
+      ? "Pendiente"
+      : "Completada";
+
+  const { error } =
+    await supabase
+      .from("tasks")
+      .update({
+        status: next
+      })
+      .eq("id", id);
+
+  assertNoError(error);
 }
-export async function addFeeMovement(obj){
-  const s=state();s.fee_movements.push({...obj,id:randomId("M")});
-  const c=s.cases.find(x=>x.id===obj.case_id);
-  if(c&&obj.type==="Cobro"){c.collected=Number(c.collected||0)+Number(obj.amount);c.billed=Math.max(Number(c.billed||0),Number(c.collected||0))}
-  save(s);
+
+export async function addFeeMovement(
+  obj
+) {
+  const { error: movementError } =
+    await supabase
+      .from("fee_movements")
+      .insert(obj);
+
+  assertNoError(movementError);
+
+  if (obj.type === "Cobro") {
+    const {
+      data: currentCase,
+      error: readError
+    } = await supabase
+      .from("cases")
+      .select("collected,billed")
+      .eq("id", obj.case_id)
+      .single();
+
+    assertNoError(readError);
+
+    const collected =
+      Number(
+        currentCase?.collected || 0
+      ) +
+      Number(obj.amount || 0);
+
+    const billed =
+      Math.max(
+        Number(
+          currentCase?.billed || 0
+        ),
+        collected
+      );
+
+    const { error: updateError } =
+      await supabase
+        .from("cases")
+        .update({
+          collected,
+          billed
+        })
+        .eq("id", obj.case_id);
+
+    assertNoError(updateError);
+  }
 }
-export async function uploadDocument(caseId,actionId,file){
-  const id=randomId("FILE"),sha256=await hashFile(file);
-  await putBlob({id,blob:file,name:file.name,type:file.type,size:file.size,created_at:new Date().toISOString()});
-  const s=state();s.documents=s.documents||[];
-  s.documents.push({id,case_id:caseId,action_id:actionId,file_name:file.name,object_path:`local://${id}`,mime_type:file.type,size_bytes:file.size,sha256,created_at:new Date().toISOString(),archived_at:null});
-  save(s);return id;
+
+export async function signedDocumentUrl(
+  url
+) {
+  if (!url) {
+    throw new Error(
+      "Este documento todavía no tiene un vínculo de Google Drive."
+    );
+  }
+
+  return url;
 }
-export async function signedDocumentUrl(path,download=false){
-  const id=String(path||"").replace("local://","");
-  const rec=await getBlob(id);if(!rec?.blob)throw new Error("El archivo no está disponible en este navegador.");
-  return URL.createObjectURL(rec.blob);
+
+export async function archiveDocument(
+  id
+) {
+  const { error } =
+    await supabase
+      .from("documents")
+      .update({
+        archived_at:
+          new Date().toISOString()
+      })
+      .eq("id", id);
+
+  assertNoError(error);
 }
-export async function archiveDocument(id){
-  const s=state(),d=(s.documents||[]).find(x=>x.id===id);if(d)d.archived_at=new Date().toISOString();
-  s.documents=(s.documents||[]).filter(x=>!x.archived_at);save(s);
+
+export function resetDemo() {
+  // Sin uso desde que Supabase
+  // es la memoria oficial.
 }
-export function resetDemo(){localStorage.removeItem(LS);indexedDB.deleteDatabase(DB_NAME)}
